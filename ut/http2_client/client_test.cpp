@@ -214,6 +214,16 @@ TEST_P(client_test_p, ConnectToServer)
     ASSERT_TRUE(client.is_connected());
 }
 
+TEST_P(client_test_p, ConnectToServerWithMoreThanOneConnections)
+{
+    auto stats = std::make_shared<stats_mock>();
+    auto queue = std::make_unique<script_queue_mock>();
+    auto client = client_impl(stats, client_io_ctx, std::move(queue), server_host, server_port,
+                              GetParam(), 5);
+
+    ASSERT_TRUE(client.is_connected());
+}
+
 TEST_P(client_test_p, ErrorConnectingToServer)
 {
     auto stats = std::make_shared<stats_mock>();

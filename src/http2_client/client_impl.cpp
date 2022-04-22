@@ -27,18 +27,23 @@ namespace http2_client
 {
 client_impl::client_impl(std::shared_ptr<stats::stats_if> st, boost::asio::io_context& io_ctx,
                          std::unique_ptr<traffic::script_queue_if> q, const std::string& h,
-                         const std::string& p, const bool secure_session)
+                         const std::string& p, const bool secure_session,
+                         const int the_number_of_connections)
     : stats(std::move(st)),
       io_ctx(io_ctx),
       queue(std::move(q)),
       host(h),
       port(p),
       secure_session(secure_session),
-      conn(std::make_unique<connection>(h, p, secure_session))
+      number_of_conns(the_number_of_connections)
 {
-    if (!conn->wait_to_be_connected())
+    for (int i = 0; i < number_of_conns; i++)
     {
-        std::cerr << "Fatal error. Could not connect to: " << host << ":" << port << std::endl;
+        conns.push_back(std::make_unique<connection>(h, p, secure_session));
+        if (!conns[i]->wait_to_be_connected())
+        {
+            std::cerr << "Fatal error. Could not connect to: " << host << ":" << port << std::endl;
+        }
     }
 }
 
@@ -84,18 +89,18 @@ void client_impl::on_timeout(const boost::system::error_code& e,
     }
 }
 
-void client_impl::open_new_connection()
+void client_impl::open_new_connection(int conn_index)
 {
     if (!mtx.try_lock())
     {
         return;
     }
-    conn.reset();
+    conns[conn_index].reset();
 
     if (auto new_conn = std::make_unique<connection>(host, port, secure_session);
         new_conn->wait_to_be_connected())
     {
-        conn = std::move(new_conn);
+        conns[conn_index] = std::move(new_conn);
     }
     else
     {
@@ -104,8 +109,27 @@ void client_impl::open_new_connection()
     mtx.unlock();
 }
 
+int client_impl::get_next_connection_index()
+{
+    return (connection_round_robin_counter == number_of_conns - 1)
+               ? connection_round_robin_counter.exchange(0)
+               : connection_round_robin_counter++;
+}
+
+bool client_impl::is_connected(int connection_index) const
+{
+    if (conns[connection_index] == nullptr ||
+        conns[connection_index]->get_status() != connection::status::OPEN)
+    {
+        return false;
+    }
+    return true;
+}
+
 void client_impl::send()
 {
+    int connection_index = get_next_connection_index();
+
     auto script_opt = queue->get_next_script();
     if (!script_opt.has_value())
     {
@@ -114,11 +138,11 @@ void client_impl::send()
     const auto& script = *script_opt;
     request req = get_next_request(host, port, script);
 
-    if (!is_connected())
+    if (!is_connected(connection_index))
     {
         stats->add_client_error(req.name, 466);
         queue->cancel_script();
-        open_new_connection();
+        open_new_connection(connection_index);
         return;
     }
 
@@ -129,15 +153,15 @@ void client_impl::send()
         return;
     }
 
-    const auto& session = conn->get_session();
-    session.io_service().post([this, script, &session, req] {
+    const auto& session = conns[connection_index]->get_session();
+    session.io_service().post([this, script, &session, req, connection_index] {
         boost::system::error_code ec;
         auto init_time = std::make_shared<time_point<steady_clock>>(steady_clock::now());
         auto nghttp_req = session.submit(ec, req.method, req.url, req.body, req.headers);
         if (!nghttp_req)
         {
             std::cerr << "Error submitting. Closing connection:" << ec.message() << std::endl;
-            conn->close();
+            conns[connection_index]->close();
             stats->add_client_error(req.name, 468);
             queue->cancel_script();
             return;

@@ -23,7 +23,8 @@ class client_impl : public client
 public:
     client_impl(std::shared_ptr<stats::stats_if> stats, boost::asio::io_context& io_ctx,
                 std::unique_ptr<traffic::script_queue_if> q, const std::string& h,
-                const std::string& p, const bool secure_session = false);
+                const std::string& p, const bool secure_session = false,
+                const int the_number_of_connections = 1);
 
     ~client_impl() final = default;
 
@@ -32,11 +33,17 @@ public:
     void close_window() override { queue->close_window(); };
     bool is_connected() const override
     {
-        return conn != nullptr && conn->get_status() == connection::status::OPEN;
+        for (int i = 0; i < number_of_conns; i++)
+        {
+            if (!is_connected(i))
+            {
+                return false;
+            }
+        }
+        return true;
     };
 
 private:
-    void open_new_connection();
     void handle_timeout(const std::shared_ptr<race_control>& control,
                         const std::string& msg_name) const;
     void handle_timeout_cancelled(const std::shared_ptr<race_control>& control,
@@ -44,14 +51,21 @@ private:
     void on_timeout(const boost::system::error_code& e, std::shared_ptr<race_control> control,
                     const std::string& msg_name) const;
 
+    void open_new_connection(int conn_index);
+    int get_next_connection_index();
+    bool is_connected(int conn_index) const;
+
     std::shared_ptr<stats::stats_if> stats;
     boost::asio::io_context& io_ctx;
     std::unique_ptr<traffic::script_queue_if> queue;
     std::string host;
     std::string port;
     bool secure_session;
-    std::unique_ptr<connection> conn;
     std::shared_timed_mutex mtx;
+
+    std::vector<std::unique_ptr<connection>> conns;
+    std::atomic<int> connection_round_robin_counter{0};
+    int number_of_conns;
 };
 
 }  // namespace http2_client
