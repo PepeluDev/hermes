@@ -37,6 +37,7 @@ const int default_stats_print_period{10};
 
 const std::string default_traffic_path{"/etc/scripts/traffic.json"};
 const std::string default_output_file{"hermes.out"};
+const int default_connections_number{1};
 
 [[noreturn]] static void usage(int rc)
 {
@@ -44,14 +45,15 @@ const std::string default_output_file{"hermes.out"};
            "C++ Traffic Generator. Usage:  %s [options] \n"
            "options:\n\n"
            " \t-r <rate>\tRequests/second ( Default: %d )\n"
+           " \t-c <connections>\tConnections to establish with the server ( Default: %d )\n"
            " \t-t <time>\tTime to run traffic (s) ( Default: %d )\n"
            " \t-p <period>\tPrint and save statistics every <period> (s) ( Default: %d )\n"
            " \t-f <path>\tPath with the traffic json definition ( Default: %s )\n"
            " \t-s \t\tShow schema for json traffic definition.\n"
            " \t-o <file>\tOutput file for statistics( Default: %s )\n"
            " \t-h \t\tThis help.",
-           progname, default_rate, default_duration, default_stats_print_period,
-           default_traffic_path.c_str(), default_output_file.c_str());
+           progname, default_rate, default_connections_number, default_duration,
+           default_stats_print_period, default_traffic_path.c_str(), default_output_file.c_str());
     exit(rc);
 }
 
@@ -63,11 +65,12 @@ int main(int argc, char* argv[])
     unsigned int rate{default_rate};
     int duration{default_duration};
     int print_period{default_stats_print_period};
+    int connections_number{default_connections_number};
     std::string traffic_json_path{default_traffic_path};
     std::string output_file{default_output_file};
 
     int option{};
-    while ((option = getopt(argc, argv, "hr:t:f:sp:o:")) != EOF)
+    while ((option = getopt(argc, argv, "hr:c:t:f:sp:o:")) != EOF)
     {
         switch (option)
         {
@@ -75,6 +78,9 @@ int main(int argc, char* argv[])
                 usage(0);
             case 'r':
                 rate = atoi(optarg);
+                break;
+            case 'c':
+                connections_number = atoi(optarg);
                 break;
             case 't':
                 duration = atoi(optarg);
@@ -154,7 +160,7 @@ int main(int argc, char* argv[])
     auto q = std::make_unique<traffic::script_queue>(*the_script);
     auto client = std::make_unique<http2_client::client_impl>(
         stats, client_io_ctx, std::move(q), the_script->get_server_dns(),
-        the_script->get_server_port(), the_script->is_server_secure());
+        the_script->get_server_port(), the_script->is_server_secure(), connections_number);
     if (!client->is_connected())
     {
         std::cerr << "Terminating application. Error connecting server." << std::endl;
